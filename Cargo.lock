@@ -189,9 +189,9 @@ checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.12.0"
+version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f409eb70b561706bf8abba8ca9c112729c481595893fd06a2dd9af8ed8441148"
+checksum = "3c6a895b664295a4ba0c2c0203c7075ea585dd75cd5c37a8efac829e13e460ef"
 dependencies = [
  "aws-lc-sys",
  "paste",
