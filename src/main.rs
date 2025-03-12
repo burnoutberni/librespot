@@ -14,10 +14,10 @@ use futures_util::StreamExt;
 #[cfg(feature = "alsa-backend")]
 use librespot::playback::mixer::alsamixer::AlsaMixer;
 use librespot::{
-    connect::{ConnectConfig, Spirc},
+    connect::{ConnectConfig, Spirc, LoadRequest, LoadRequestOptions},
     core::{
         authentication::Credentials, cache::Cache, config::DeviceType, version, Session,
-        SessionConfig,
+        SessionConfig, spotify_id::SpotifyId
     },
     discovery::DnsSdServiceBuilder,
     playback::{
@@ -218,6 +218,7 @@ struct Setup {
     emit_sink_events: bool,
     zeroconf_ip: Vec<std::net::IpAddr>,
     zeroconf_backend: Option<DnsSdServiceBuilder>,
+    play_uri: Option<String>,
 }
 
 fn get_setup() -> Setup {
@@ -279,6 +280,7 @@ fn get_setup() -> Setup {
     const ZEROCONF_PORT: &str = "zeroconf-port";
     const ZEROCONF_INTERFACE: &str = "zeroconf-interface";
     const ZEROCONF_BACKEND: &str = "zeroconf-backend";
+    const PLAY_URI: &str = "play-uri";
 
     // Mostly arbitrary.
     const AP_PORT_SHORT: &str = "a";
@@ -330,6 +332,7 @@ fn get_setup() -> Setup {
     const NORMALISATION_THRESHOLD_SHORT: &str = "Z";
     const ZEROCONF_PORT_SHORT: &str = "z";
     const ZEROCONF_BACKEND_SHORT: &str = ""; // no short flag
+    const PLAY_URI_SHORT: &str = ""; // no short flag
 
     // Options that have different descriptions
     // depending on what backends were enabled at build time.
@@ -647,6 +650,12 @@ fn get_setup() -> Setup {
         ZEROCONF_BACKEND,
         "Zeroconf (MDNS/DNS-SD) backend to use. Valid values are 'avahi', 'dns-sd' and 'libmdns', if librespot is compiled with the corresponding feature flags.",
         "BACKEND"
+    )
+    .optopt(
+        PLAY_URI_SHORT,
+        PLAY_URI,
+        "Play a specific Spotify URI and exit when finished",
+        "URI"
     );
 
     #[cfg(feature = "passthrough-decoder")]
@@ -1820,6 +1829,7 @@ fn get_setup() -> Setup {
         emit_sink_events,
         zeroconf_ip,
         zeroconf_backend,
+        play_uri: opt_str("play-uri"),
     }
 }
 
@@ -1992,13 +2002,55 @@ async fn main() {
                                                                 last_credentials.clone().unwrap_or_default(),
                                                                 player.clone(),
                                                                 mixer.clone()).await {
-                    Ok((spirc_, spirc_task_)) => (spirc_, spirc_task_),
+                    Ok((spirc, task)) => {
+                        // If we have a play_uri, load it through Spirc
+                        if let Some(uri) = &setup.play_uri {
+                            // Wait a short period to allow Spirc to initialize and become active
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            
+                            // First make this session active
+                            spirc.activate().await?;
+
+                            let track_id = SpotifyId::from_uri(uri).unwrap_or_else(|_| {
+                                error!("Invalid Spotify URI: {}", uri);
+                                exit(1);
+                            });
+
+                            // Create LoadRequest
+                            let load_request = LoadRequest::from_context_uri(
+                                track_id.to_uri().unwrap(),
+                                LoadRequestOptions {
+                                    start_playing: true,
+                                    seek_to: 0,
+                                    playing_track: None,
+                                    context_options: None,
+                                },
+                            );
+                            
+                            // let load_request = LoadRequest::from_context_uri(
+                            //     track_id.to_uri().unwrap().expect("REASON"), // Context URI
+                            //     true,  // autoplay
+                            //     0,     // position_ms
+                            //     None,  // referrer_identifier
+                            //     None   // context_description
+                            // );
+
+                            // Send the command through Spirc
+                            if let Err(e) = spirc.load(load_request.into()) {
+                                error!("Failed to send load command: {}", e);
+                                exit(1);
+                            }
+                        }
+                        (Some(spirc), Box::pin(task))
+                    }
                     Err(e) => {
                         error!("could not initialize spirc: {}", e);
                         exit(1);
                     }
                 };
-                spirc = Some(spirc_);
+                spirc = Some(spirc_.expect("REASON"));
+                // Ok((spirc_, spirc_task_)) => (spirc_, spirc_task_),
+
                 spirc_task = Some(Box::pin(spirc_task_));
 
                 connecting = false;
